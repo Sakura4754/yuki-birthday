@@ -59,4 +59,61 @@ const texCanvas=document.createElement('canvas');texCanvas.width=2048;texCanvas.
 // Thin raised lettering, with a subtle darker gold edge below the lit face.
 for(let i=0;i<3;i++){const radius=1.468+i*.004;const relief=mesh(new T.CylinderGeometry(radius,radius,1.46,100,1,true,-.82,1.64),new T.MeshStandardMaterial({map:tex,color:0xa18b66,transparent:true,alphaTest:.1,roughness:.46,metalness:.4,depthWrite:false,side:T.FrontSide}));relief.position.y=1.818;relief.castShadow=false;relief.renderOrder=i+1;}
 
-let yaw=0,pitch=.18,dist=9.6,auto=false,points=new Map(),lastPinch=0;const target=new T.Vector3(0,1.85,0);function resize(){renderer.setSize(innerWidth,innerHeight);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix()}addEventListener('resize',resize);resize();canvas.addEventListener('pointerdown',e=>{canvas.setPointerCapture(e.pointerId);points.set(e.pointerId,{x:e.clientX,y:e.clientY});lastPinch=0;auto=false;updateButton()});canvas.addEventListener('pointermove',e=>{if(!points.has(e.pointerId))return;const p=points.get(e.pointerId);if(points.size===1){yaw-=(e.clientX-p.x)*.009;pitch=Math.max(-.12,Math.min(1.1,pitch+(e.clientY-p.y)*.006))}points.set(e.pointerId,{x:e.clientX,y:e.clientY});if(points.size===2){const[a,b]=[...points.values()];let d=Math.hypot(a.x-b.x,a.y-b.y);if(lastPinch)dist=Math.max(5.6,Math.min(14,dist*lastPinch/d));lastPinch=d}});function release(e){points.delete(e.pointerId);lastPinch=0}canvas.addEventListener('pointerup',release);canvas.addEventListener('pointercancel',release);canvas.addEventListener('wheel',e=>{e.preventDefault();dist=Math.max(5.6,Math.min(14,dist+e.deltaY*.008))},{passive:false});const btn=document.querySelector('#spin');function updateButton(){btn.textContent=auto?'停止旋轉':'自動旋轉';btn.setAttribute('aria-pressed',String(auto))}btn.onclick=()=>{auto=!auto;updateButton()};document.querySelector('#reset').onclick=()=>{yaw=0;pitch=.18;dist=9.6;auto=false;updateButton()};let prev=0;function frame(t){requestAnimationFrame(frame);if(auto)yaw+=Math.min((t-prev)/1000,.04)*.22;prev=t;let fit=innerWidth/innerHeight<.65?1.13:1;camera.position.set(Math.sin(yaw)*Math.cos(pitch)*dist*fit,1.85+Math.sin(pitch)*dist*fit,Math.cos(yaw)*Math.cos(pitch)*dist*fit);camera.lookAt(target);renderer.render(scene,camera)}requestAnimationFrame(frame);
+// A real removable sector: the same outer frosting, with sponge and cream cut faces.
+const cutStart=1.25,cutAngle=.65,cutEnd=cutStart+cutAngle;
+const slice=new T.Group();cake.add(slice);slice.visible=false;
+const remainder=new T.Group();cake.add(remainder);remainder.visible=false;
+mesh(new T.LatheGeometry(profile,128,cutEnd,Math.PI*2-cutAngle),cream,remainder);
+mesh(new T.LatheGeometry(profile,32,cutStart,cutAngle),cream,slice);
+const sponge=new T.MeshStandardMaterial({color:0xeac995,roughness:.92,bumpMap:grain,bumpScale:.018,side:T.DoubleSide});
+const filling=new T.MeshStandardMaterial({color:0xfff9e9,roughness:.8,side:T.DoubleSide});
+function cutFace(parent,angle){
+ const face=new T.Group();parent.add(face);face.rotation.y=angle;
+ for(const [low,high,mat] of [[.065,.78,sponge],[.78,.88,filling],[.88,1.61,sponge],[1.61,1.71,filling],[1.71,2.66,sponge],[2.66,2.693,filling]]){
+ const m=mesh(new T.PlaneGeometry(1.44,high-low),mat,face);m.rotation.y=Math.PI/2;m.position.set(0,(low+high)/2,.72);
+ }
+}
+for(const angle of [cutStart,cutEnd]){cutFace(slice,angle);cutFace(remainder,angle)}
+// Side mosaic squares stay attached to the piece that is served.
+const sliceTiles=[];for(const child of [...cake.children]){
+ if(child.isGroup&&child.children[0]?.geometry===sideGeometry){const a=(Math.atan2(child.position.x,child.position.z)+Math.PI*2)%(Math.PI*2);if(a>cutStart&&a<cutEnd)sliceTiles.push(child)}
+}
+const plate=new T.Group();plate.position.set(2.8,.13,.5);scene.add(plate);
+const plateProfile=[new T.Vector2(0,0),new T.Vector2(.72,0),new T.Vector2(.95,.04),new T.Vector2(1.02,.10),new T.Vector2(1.03,.13),new T.Vector2(1.00,.15),new T.Vector2(.93,.12),new T.Vector2(.70,.065),new T.Vector2(0,.065)];
+mesh(new T.LatheGeometry(plateProfile,96),ivory,plate);
+const plateRim=mesh(new T.TorusGeometry(1.015,.009,8,96),gold,plate);plateRim.rotation.x=Math.PI/2;plateRim.position.y=.14;
+const knife=new T.Group();scene.add(knife);knife.visible=false;
+const steel=new T.MeshStandardMaterial({color:0xe6e9ec,metalness:.95,roughness:.19,side:T.DoubleSide});
+const bladeShape=new T.Shape();bladeShape.moveTo(0,0);bladeShape.lineTo(1.65,0);bladeShape.lineTo(1.65,.25);bladeShape.lineTo(.15,.25);bladeShape.quadraticCurveTo(0,.2,0,0);
+const blade=mesh(new T.ExtrudeGeometry(bladeShape,{depth:.025,bevelEnabled:true,bevelThickness:.008,bevelSize:.008,bevelSegments:2,steps:1}),steel,knife);blade.rotation.y=-Math.PI/2;
+const handle=mesh(new T.BoxGeometry(.12,.18,.62),gold,knife);handle.position.set(0,.14,1.96);
+for(const z of [1.79,2.11]){const rivet=mesh(new T.SphereGeometry(.026,12,8),steel,knife);rivet.position.set(.064,.14,z)}
+const cutButton=document.querySelector('#cut'),cutStatus=document.querySelector('#cut-status');
+let cutTime=null,served=false;
+const ease=x=>{x=T.MathUtils.clamp(x,0,1);return x*x*(3-2*x)};
+function startCut(){
+ for(const tile of sliceTiles)cake.add(tile);
+ slice.position.set(0,0,0);slice.visible=false;remainder.visible=false;body.visible=true;
+ served=false;auto=false;updateButton();points.clear();yaw=.25;pitch=.32;dist=12.8;
+ target.set(1,1.65,0);knife.visible=true;cutTime=performance.now();cutButton.disabled=true;cutButton.textContent='正在切蛋糕…';cutStatus.textContent='先切一刀，再切一刀…';
+}
+cutButton.onclick=startCut;
+function animateCut(t){
+ if(cutTime===null)return;const elapsed=(t-cutTime)/1000;
+ if(elapsed<3.8){
+ const second=elapsed>=1.9,phase=(elapsed%1.9)/1.9;
+ knife.rotation.y=second?cutEnd:cutStart;
+ const down=phase<.55?ease(phase/.55):1-ease((phase-.55)/.45);
+ knife.position.set(0,3.12-3.02*down,0);
+ }else if(elapsed<4.4){knife.position.y=3.12+ease((elapsed-3.8)/.6);}
+ else{
+ knife.visible=false;
+ if(!slice.visible){body.visible=false;remainder.visible=true;slice.visible=true;for(const tile of sliceTiles)slice.add(tile);cutStatus.textContent='把這一塊甜蜜放到盤子上…'}
+ const u=ease((elapsed-4.4)/2.8);
+ // The sector's centre sits over the centre of the side plate.
+ slice.position.set(1.85*u,.17*u+.45*Math.sin(Math.PI*u),.5*u);
+ if(elapsed>=7.2){cutTime=null;served=true;cutButton.disabled=false;cutButton.textContent='再切一次';cutStatus.textContent='生日快樂，這一塊送給妳 ♡'}
+ }
+}
+
+let yaw=0,pitch=.18,dist=9.6,auto=false,points=new Map(),lastPinch=0;const target=new T.Vector3(0,1.85,0);function resize(){renderer.setSize(innerWidth,innerHeight);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix()}addEventListener('resize',resize);resize();canvas.addEventListener('pointerdown',e=>{if(cutTime!==null)return;canvas.setPointerCapture(e.pointerId);points.set(e.pointerId,{x:e.clientX,y:e.clientY});lastPinch=0;auto=false;updateButton()});canvas.addEventListener('pointermove',e=>{if(!points.has(e.pointerId))return;const p=points.get(e.pointerId);if(points.size===1){yaw-=(e.clientX-p.x)*.009;pitch=Math.max(-.12,Math.min(1.1,pitch+(e.clientY-p.y)*.006))}points.set(e.pointerId,{x:e.clientX,y:e.clientY});if(points.size===2){const[a,b]=[...points.values()];let d=Math.hypot(a.x-b.x,a.y-b.y);if(lastPinch)dist=Math.max(5.6,Math.min(14,dist*lastPinch/d));lastPinch=d}});function release(e){points.delete(e.pointerId);lastPinch=0}canvas.addEventListener('pointerup',release);canvas.addEventListener('pointercancel',release);canvas.addEventListener('wheel',e=>{e.preventDefault();dist=Math.max(5.6,Math.min(14,dist+e.deltaY*.008))},{passive:false});const btn=document.querySelector('#spin');function updateButton(){btn.textContent=auto?'停止旋轉':'自動旋轉';btn.setAttribute('aria-pressed',String(auto))}btn.onclick=()=>{if(cutTime!==null)return;auto=!auto;updateButton()};document.querySelector('#reset').onclick=()=>{if(cutTime!==null)return;yaw=0;pitch=served?.32:.18;dist=served?12.8:9.6;target.set(served?1:0,1.85,0);auto=false;updateButton()};let prev=0;function frame(t){requestAnimationFrame(frame);animateCut(t);if(auto)yaw+=Math.min((t-prev)/1000,.04)*.22;prev=t;let fit=innerWidth/innerHeight<.65?1.13:1;if(served||cutTime!==null)fit=Math.max(fit,1.05/camera.aspect);camera.position.set(target.x+Math.sin(yaw)*Math.cos(pitch)*dist*fit,1.85+Math.sin(pitch)*dist*fit,Math.cos(yaw)*Math.cos(pitch)*dist*fit);camera.lookAt(target);renderer.render(scene,camera)}requestAnimationFrame(frame);
